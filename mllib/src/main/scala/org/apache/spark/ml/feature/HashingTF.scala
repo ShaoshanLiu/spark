@@ -21,7 +21,8 @@ import org.apache.spark.annotation.AlphaComponent
 import org.apache.spark.ml.UnaryTransformer
 import org.apache.spark.ml.param.{IntParam, ParamMap}
 import org.apache.spark.mllib.feature
-import org.apache.spark.mllib.linalg.Vector
+import org.apache.spark.mllib.linalg.{VectorUDT, Vector}
+import org.apache.spark.sql.types.DataType
 
 /**
  * :: AlphaComponent ::
@@ -30,13 +31,24 @@ import org.apache.spark.mllib.linalg.Vector
 @AlphaComponent
 class HashingTF extends UnaryTransformer[Iterable[_], Vector, HashingTF] {
 
-  /** number of features */
-  val numFeatures = new IntParam(this, "numFeatures", "number of features", Some(1 << 18))
-  def setNumFeatures(value: Int) = set(numFeatures, value)
-  def getNumFeatures: Int = get(numFeatures)
+  /**
+   * number of features
+   * @group param
+   */
+  val numFeatures = new IntParam(this, "numFeatures", "number of features")
+
+  /** @group getParam */
+  def getNumFeatures: Int = getOrDefault(numFeatures)
+
+  /** @group setParam */
+  def setNumFeatures(value: Int): this.type = set(numFeatures, value)
+
+  setDefault(numFeatures -> (1 << 18))
 
   override protected def createTransformFunc(paramMap: ParamMap): Iterable[_] => Vector = {
     val hashingTF = new feature.HashingTF(paramMap(numFeatures))
     hashingTF.transform
   }
+
+  override protected def outputDataType: DataType = new VectorUDT()
 }

@@ -25,7 +25,6 @@ import org.scalatest.{Matchers, FunSuite}
 import org.scalatest.concurrent.Eventually._
 
 import org.apache.spark.JobExecutionStatus._
-import org.apache.spark.SparkContext._
 
 class StatusTrackerSuite extends FunSuite with Matchers with LocalSparkContext {
 
@@ -83,7 +82,8 @@ class StatusTrackerSuite extends FunSuite with Matchers with LocalSparkContext {
       secondJobFuture.jobIds.head
     }
     eventually(timeout(10 seconds)) {
-      sc.statusTracker.getJobIdsForGroup("my-job-group").toSet should be (Set(firstJobId, secondJobId))
+      sc.statusTracker.getJobIdsForGroup("my-job-group").toSet should be (
+        Set(firstJobId, secondJobId))
     }
   }
 }

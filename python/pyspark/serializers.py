@@ -70,6 +70,7 @@ class SpecialLengths(object):
     PYTHON_EXCEPTION_THROWN = -2
     TIMING_DATA = -3
     END_OF_STREAM = -4
+    NULL = -5
 
 
 class Serializer(object):
@@ -133,6 +134,10 @@ class FramedSerializer(Serializer):
 
     def _write_with_length(self, obj, stream):
         serialized = self.dumps(obj)
+        if serialized is None:
+            raise ValueError("serialized value should not be None")
+        if len(serialized) > (1 << 31):
+            raise ValueError("can not serialize object larger than 2G")
         write_int(len(serialized), stream)
         if self._only_write_strings:
             stream.write(str(serialized))
@@ -143,8 +148,10 @@ class FramedSerializer(Serializer):
         length = read_int(stream)
         if length == SpecialLengths.END_OF_DATA_SECTION:
             raise EOFError
+        elif length == SpecialLengths.NULL:
+            return None
         obj = stream.read(length)
-        if obj == "":
+        if len(obj) < length:
             raise EOFError
         return self.loads(obj)
 
@@ -179,6 +186,10 @@ class BatchedSerializer(Serializer):
     def _batched(self, iterator):
         if self.batchSize == self.UNLIMITED_BATCH_SIZE:
             yield list(iterator)
+        elif hasattr(iterator, "__len__") and hasattr(iterator, "__getslice__"):
+            n = len(iterator)
+            for i in xrange(0, n, self.batchSize):
+                yield iterator[i: i + self.batchSize]
         else:
             items = []
             count = 0
@@ -207,6 +218,29 @@ class BatchedSerializer(Serializer):
 
     def __repr__(self):
         return "BatchedSerializer(%s, %d)" % (str(self.serializer), self.batchSize)
+
+
+class FlattenedValuesSerializer(BatchedSerializer):
+
+    """
+    Serializes a stream of list of pairs, split the list of values
+    which contain more than a certain number of objects to make them
+    have similar sizes.
+    """
+    def __init__(self, serializer, batchSize=10):
+        BatchedSerializer.__init__(self, serializer, batchSize)
+
+    def _batched(self, iterator):
+        n = self.batchSize
+        for key, values in iterator:
+            for i in xrange(0, len(values), n):
+                yield key, values[i:i + n]
+
+    def load_stream(self, stream):
+        return self.serializer.load_stream(stream)
+
+    def __repr__(self):
+        return "FlattenedValuesSerializer(%d)" % self.batchSize
 
 
 class AutoBatchedSerializer(BatchedSerializer):
@@ -240,7 +274,7 @@ class AutoBatchedSerializer(BatchedSerializer):
         return (isinstance(other, AutoBatchedSerializer) and
                 other.serializer == self.serializer and other.bestSize == self.bestSize)
 
-    def __str__(self):
+    def __repr__(self):
         return "AutoBatchedSerializer(%s)" % str(self.serializer)
 
 
@@ -450,9 +484,9 @@ class CompressedSerializer(FramedSerializer):
     """
     Compress the serialized data
     """
-
     def __init__(self, serializer):
         FramedSerializer.__init__(self)
+        assert isinstance(serializer, FramedSerializer), "serializer must be a FramedSerializer"
         self.serializer = serializer
 
     def dumps(self, obj):
@@ -460,6 +494,9 @@ class CompressedSerializer(FramedSerializer):
 
     def loads(self, obj):
         return self.serializer.loads(zlib.decompress(obj))
+
+    def __eq__(self, other):
+        return isinstance(other, CompressedSerializer) and self.serializer == other.serializer
 
 
 class UTF8Deserializer(Serializer):
@@ -475,6 +512,8 @@ class UTF8Deserializer(Serializer):
         length = read_int(stream)
         if length == SpecialLengths.END_OF_DATA_SECTION:
             raise EOFError
+        elif length == SpecialLengths.NULL:
+            return None
         s = stream.read(length)
         return s.decode("utf-8") if self.use_unicode else s
 
@@ -486,6 +525,9 @@ class UTF8Deserializer(Serializer):
             return
         except EOFError:
             return
+
+    def __eq__(self, other):
+        return isinstance(other, UTF8Deserializer) and self.use_unicode == other.use_unicode
 
 
 def read_long(stream):
@@ -517,3 +559,8 @@ def write_int(value, stream):
 def write_with_length(obj, stream):
     write_int(len(obj), stream)
     stream.write(obj)
+
+
+if __name__ == '__main__':
+    import doctest
+    doctest.testmod()

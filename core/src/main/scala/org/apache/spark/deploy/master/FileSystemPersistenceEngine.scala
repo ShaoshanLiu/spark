@@ -18,12 +18,14 @@
 package org.apache.spark.deploy.master
 
 import java.io._
-import java.nio.ByteBuffer
-
-import org.apache.spark.Logging
-import org.apache.spark.serializer.Serializer
 
 import scala.reflect.ClassTag
+
+import akka.serialization.Serialization
+
+import org.apache.spark.Logging
+import org.apache.spark.util.Utils
+
 
 /**
  * Stores data in a single on-disk directory with one file per application and worker.
@@ -32,12 +34,11 @@ import scala.reflect.ClassTag
  * @param dir Directory to store files. Created if non-existent (but not recursively).
  * @param serialization Used to serialize our objects.
  */
-private[spark] class FileSystemPersistenceEngine(
+private[master] class FileSystemPersistenceEngine(
     val dir: String,
-    val serialization: Serializer)
+    val serialization: Serialization)
   extends PersistenceEngine with Logging {
 
-  val serializer = serialization.newInstance()
   new File(dir).mkdir()
 
   override def persist(name: String, obj: Object): Unit = {
@@ -48,7 +49,7 @@ private[spark] class FileSystemPersistenceEngine(
     new File(dir + File.separator + name).delete()
   }
 
-  override def read[T: ClassTag](prefix: String) = {
+  override def read[T: ClassTag](prefix: String): Seq[T] = {
     val files = new File(dir).listFiles().filter(_.getName.startsWith(prefix))
     files.map(deserializeFromFile[T])
   }
@@ -56,17 +57,17 @@ private[spark] class FileSystemPersistenceEngine(
   private def serializeIntoFile(file: File, value: AnyRef) {
     val created = file.createNewFile()
     if (!created) { throw new IllegalStateException("Could not create file: " + file) }
-
-    val out = serializer.serializeStream(new FileOutputStream(file))   
-    try {
-      out.writeObject(value)
-    } finally {
+    val serializer = serialization.findSerializerFor(value)
+    val serialized = serializer.toBinary(value)
+    val out = new FileOutputStream(file)
+    Utils.tryWithSafeFinally {
+      out.write(serialized)
+    } {
       out.close()
     }
-
   }
 
-  def deserializeFromFile[T](file: File): T = {
+  private def deserializeFromFile[T](file: File)(implicit m: ClassTag[T]): T = {
     val fileData = new Array[Byte](file.length().asInstanceOf[Int])
     val dis = new DataInputStream(new FileInputStream(file))
     try {
@@ -74,7 +75,9 @@ private[spark] class FileSystemPersistenceEngine(
     } finally {
       dis.close()
     }
-
-    serializer.deserializeStream(dis).readObject()
+    val clazz = m.runtimeClass.asInstanceOf[Class[T]]
+    val serializer = serialization.serializerFor(clazz)
+    serializer.fromBinary(fileData).asInstanceOf[T]
   }
+
 }
